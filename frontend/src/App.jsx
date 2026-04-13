@@ -46,12 +46,13 @@ export default function App() {
     setSentimentData(null);
 
     try {
-      // ── 同時發出四個請求 ──────────────────────────────────────────────────
-      const [klineRes, indRes, fundRes, sentRes] = await Promise.allSettled([
+      // ── 同時發出五個請求 ──────────────────────────────────────────────────
+      const [klineRes, indRes, fundRes, sentRes, srRes] = await Promise.allSettled([
         axios.get(`/api/stock/${sym}/kline`,      { params: { market, period: "daily", limit } }),
         axios.get(`/api/stock/${sym}/indicators`,  { params: { market } }),
         axios.get(`/api/stock/${sym}/fundamental`,  { params: { market } }),
         axios.get(`/api/stock/${sym}/sentiment`,    { params: { market } }),
+        axios.get(`/api/stock/${sym}/sr`,           { params: { market } }),
       ]);
 
       // K 線是必要資料，失敗就顯示錯誤
@@ -61,6 +62,7 @@ export default function App() {
           market,
           candles:    klineRes.value.data,
           indicators: indRes.status === "fulfilled" ? indRes.value.data : {},
+          sr:         srRes.status  === "fulfilled" ? srRes.value.data  : null,
         });
       } else {
         setError(

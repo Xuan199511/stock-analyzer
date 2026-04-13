@@ -68,3 +68,80 @@ def calculate_indicators(df: pd.DataFrame) -> dict:
 
 # Alias kept so the legacy /candles endpoint still works.
 calculate_all = calculate_indicators
+
+
+def calculate_sr(
+    df: pd.DataFrame,
+    window: int = 10,
+    n_levels: int = 5,
+    cluster_pct: float = 0.015,
+) -> dict:
+    """Find support and resistance levels via pivot-point clustering.
+
+    Algorithm:
+      1. Detect local high/low pivots: a bar is a pivot high if its high is the
+         maximum over [i-window, i+window]; similarly for pivot lows.
+      2. Cluster pivots within `cluster_pct` of each other (by price).
+      3. Rank clusters by how many pivots they contain (= "strength").
+      4. Return top `n_levels` resistance (above current price) and
+         top `n_levels` support (below current price).
+
+    Output:
+      {
+        "support":       [{"price": float, "strength": int}, ...],
+        "resistance":    [{"price": float, "strength": int}, ...],
+        "current_price": float,
+      }
+    """
+    high  = df["high"].values.astype(float)
+    low   = df["low"].values.astype(float)
+    close = df["close"].values.astype(float)
+    n     = len(df)
+
+    resistance_pivots: list[float] = []
+    support_pivots:    list[float] = []
+
+    for i in range(window, n - window):
+        window_high = high[i - window : i + window + 1]
+        window_low  = low[i  - window : i + window + 1]
+        if high[i] >= window_high.max():
+            resistance_pivots.append(high[i])
+        if low[i] <= window_low.min():
+            support_pivots.append(low[i])
+
+    def _cluster(pivots: list[float]) -> list[dict]:
+        if not pivots:
+            return []
+        pivots_sorted = sorted(pivots)
+        groups: list[list[float]] = []
+        group  = [pivots_sorted[0]]
+        for p in pivots_sorted[1:]:
+            if (p - group[0]) / group[0] <= cluster_pct:
+                group.append(p)
+            else:
+                groups.append(group)
+                group = [p]
+        groups.append(group)
+        return [
+            {"price": round(float(np.mean(g)), 2), "strength": len(g)}
+            for g in groups
+        ]
+
+    current_price = float(close[-1])
+    threshold     = cluster_pct  # ±threshold around current price is "neutral zone"
+
+    resistance = sorted(
+        [r for r in _cluster(resistance_pivots) if r["price"] >= current_price * (1 - threshold)],
+        key=lambda x: -x["strength"],
+    )[:n_levels]
+
+    support = sorted(
+        [s for s in _cluster(support_pivots) if s["price"] <= current_price * (1 + threshold)],
+        key=lambda x: -x["strength"],
+    )[:n_levels]
+
+    return {
+        "support":       support,
+        "resistance":    resistance,
+        "current_price": round(current_price, 2),
+    }

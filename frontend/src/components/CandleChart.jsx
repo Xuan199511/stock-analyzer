@@ -16,13 +16,15 @@ export default function CandleChart({ data }) {
   const seriesRef    = useRef({});
 
   const [activeIndicators, setActiveIndicators] = useState({
-    ma20: true, ma60: true, bb: false, volume: true,
+    ma20: true, ma60: true, bb: false, volume: true, sr: false,
   });
   const [showRSI,  setShowRSI]  = useState(false);
   const [showMACD, setShowMACD] = useState(false);
   const [tooltipInfo, setTooltipInfo] = useState(null);
 
-  const { candles = [], indicators = {}, symbol, market } = data;
+  const srLinesRef = useRef([]);
+
+  const { candles = [], indicators = {}, sr = null, symbol, market } = data;
 
   const toTime = (d) => d.slice(0, 10);
 
@@ -137,6 +139,44 @@ export default function CandleChart({ data }) {
     seriesRef.current.volume?.applyOptions({ visible: activeIndicators.volume });
   }, [activeIndicators]);
 
+  // ── Support / Resistance price lines ─────────────────────────────────────
+  useEffect(() => {
+    const candleSeries = seriesRef.current.candle;
+    if (!candleSeries) return;
+
+    // Remove any existing SR lines first
+    srLinesRef.current.forEach((line) => {
+      try { candleSeries.removePriceLine(line); } catch (_) {}
+    });
+    srLinesRef.current = [];
+
+    if (!activeIndicators.sr || !sr) return;
+
+    (sr.resistance || []).forEach(({ price, strength }) => {
+      const line = candleSeries.createPriceLine({
+        price,
+        color:            "#ef5350",
+        lineWidth:        1,
+        lineStyle:        LineStyle.Dashed,
+        axisLabelVisible: true,
+        title:            `壓力 ×${strength}`,
+      });
+      srLinesRef.current.push(line);
+    });
+
+    (sr.support || []).forEach(({ price, strength }) => {
+      const line = candleSeries.createPriceLine({
+        price,
+        color:            "#26a69a",
+        lineWidth:        1,
+        lineStyle:        LineStyle.Dashed,
+        axisLabelVisible: true,
+        title:            `支撐 ×${strength}`,
+      });
+      srLinesRef.current.push(line);
+    });
+  }, [activeIndicators.sr, sr]);
+
   const toggle = (key) => setActiveIndicators((prev) => ({ ...prev, [key]: !prev[key] }));
 
   const lastCandle = candles[candles.length - 1];
@@ -219,6 +259,18 @@ export default function CandleChart({ data }) {
           }`}
         >
           MACD
+        </button>
+        <button
+          onClick={() => toggle("sr")}
+          disabled={!sr}
+          className={`px-3 py-1 rounded text-xs font-medium transition-all border disabled:opacity-40 disabled:cursor-not-allowed ${
+            activeIndicators.sr && sr
+              ? "bg-[#f0b42922] border-[#f0b429] text-[#f0b429]"
+              : "text-[#8b949e] border-[#30363d]"
+          }`}
+          title={sr ? `支撐 ${sr.support?.length ?? 0} 條 ／ 壓力 ${sr.resistance?.length ?? 0} 條` : "無 S/R 資料"}
+        >
+          S/R
         </button>
       </div>
 

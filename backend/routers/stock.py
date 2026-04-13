@@ -249,6 +249,38 @@ async def get_stock_sentiment(
     return {"symbol": sym, "market": market.upper(), **result}
 
 
+# ── NEW: GET /api/stock/{symbol}/sr ─────────────────────────────────────────
+
+@router.get("/{symbol}/sr")
+async def get_support_resistance(
+    symbol: str,
+    market: str = Query("TW", description="TW 或 US"),
+    window: int  = Query(10, ge=3,  le=30,  description="樞紐點左右視窗（根數）"),
+    levels: int  = Query(5,  ge=1,  le=10,  description="最多回傳幾條支撐/壓力線"),
+):
+    """計算支撐位與壓力位（Pivot-Point 聚類法）。
+
+    回傳格式：
+    {
+      "support":       [{"price": float, "strength": int}, ...],
+      "resistance":    [{"price": float, "strength": int}, ...],
+      "current_price": float,
+    }
+    strength = 有幾個樞紐點落在同一價格區間（越大代表該位置被測試越多次）。
+    """
+    mkt = _resolve_market(market)
+    sym = symbol.upper()
+
+    # 需要足夠歷史資料才能識別有意義的支撐壓力；抓約一年
+    start_date, end_date = _date_range(limit=300)
+    df = await _fetch_df(sym, mkt, start_date, end_date)
+
+    if df.empty:
+        raise HTTPException(status_code=404, detail=f"找不到 {symbol}（{market}）的資料")
+
+    return indicators.calculate_sr(df, window=window, n_levels=levels)
+
+
 # ── LEGACY: GET /api/stock/candles/{symbol} ──────────────────────────────────
 
 @router.get("/candles/{symbol}")
