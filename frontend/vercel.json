@@ -2,15 +2,7 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://REPLACE_WITH_RAILWAY_URL/api/:path*"
-    }
-  ],
-  "headers": [
-    {
-      "source": "/api/:path*",
-      "headers": [
-        { "key": "X-API-Key", "value": "REPLACE_WITH_YOUR_SECRET_KEY" }
-      ]
+      "destination": "https://stock-analyzer-backend-1028.onrender.com/api/:path*"
     }
   ]
 }
