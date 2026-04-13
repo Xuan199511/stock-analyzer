@@ -4,7 +4,6 @@ httpx
 yfinance
 pandas
 numpy
-pandas-ta
 python-dotenv
 textblob
 requests
