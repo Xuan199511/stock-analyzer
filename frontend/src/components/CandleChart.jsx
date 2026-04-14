@@ -152,7 +152,7 @@ export default function CandleChart({ data, quote = null, interval = "1d", intra
     });
     srLinesRef.current = [];
 
-    if (!activeIndicators.sr || !sr) return;
+    if (!activeIndicators.sr) return;
 
     (sr.resistance || []).forEach(({ price, strength }) => {
       const line = candleSeries.createPriceLine({
@@ -316,13 +316,12 @@ export default function CandleChart({ data, quote = null, interval = "1d", intra
         )}
         <button
           onClick={() => toggle("sr")}
-          disabled={!sr}
-          className={`px-3 py-1 rounded text-xs font-medium transition-all border disabled:opacity-40 disabled:cursor-not-allowed ${
-            activeIndicators.sr && sr
+          className={`px-3 py-1 rounded text-xs font-medium transition-all border ${
+            activeIndicators.sr
               ? "bg-[#f0b42922] border-[#f0b429] text-[#f0b429]"
               : "text-[#8b949e] border-[#30363d]"
           }`}
-          title={sr ? `支撐 ${sr.support?.length ?? 0} 條 ／ 壓力 ${sr.resistance?.length ?? 0} 條` : "無 S/R 資料"}
+          title={`支撐 ${sr?.support?.length ?? 0} 條 ／ 壓力 ${sr?.resistance?.length ?? 0} 條`}
         >
           S/R
         </button>

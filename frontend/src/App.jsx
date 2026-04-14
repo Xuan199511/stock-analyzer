@@ -7,6 +7,48 @@ import BacktestPanel from "./components/BacktestPanel";
 import ScanPanel from "./components/ScanPanel";
 
 const DEFAULT_SYMBOLS = { tw: "2330", us: "AAPL" };
+
+// ── Client-side Support / Resistance calculation ──────────────────────────────
+// Runs entirely in the browser from existing daily candle data.
+// No backend call needed → always works.
+function calculateSR(candles, pivotWindow = 10, nLevels = 5, clusterPct = 0.015) {
+  const n = candles.length;
+  if (n < pivotWindow * 2 + 1) return { support: [], resistance: [], current_price: 0 };
+
+  const resPivots = [], supPivots = [];
+  for (let i = pivotWindow; i < n - pivotWindow; i++) {
+    let maxH = -Infinity, minL = Infinity;
+    for (let j = i - pivotWindow; j <= i + pivotWindow; j++) {
+      if (candles[j].high  > maxH) maxH = candles[j].high;
+      if (candles[j].low   < minL) minL = candles[j].low;
+    }
+    if (candles[i].high >= maxH) resPivots.push(candles[i].high);
+    if (candles[i].low  <= minL) supPivots.push(candles[i].low);
+  }
+
+  function cluster(pivots) {
+    if (!pivots.length) return [];
+    const sorted = [...pivots].sort((a, b) => a - b);
+    const groups = [];
+    let grp = [sorted[0]];
+    for (let i = 1; i < sorted.length; i++) {
+      if ((sorted[i] - grp[0]) / grp[0] <= clusterPct) { grp.push(sorted[i]); }
+      else { groups.push(grp); grp = [sorted[i]]; }
+    }
+    groups.push(grp);
+    return groups.map(g => ({
+      price:    Math.round(g.reduce((a, b) => a + b, 0) / g.length * 100) / 100,
+      strength: g.length,
+    }));
+  }
+
+  const cur = candles[n - 1].close;
+  return {
+    support:       cluster(supPivots) .filter(s => s.price <= cur * (1 + clusterPct)).sort((a,b) => b.strength - a.strength).slice(0, nLevels),
+    resistance:    cluster(resPivots) .filter(r => r.price >= cur * (1 - clusterPct)).sort((a,b) => b.strength - a.strength).slice(0, nLevels),
+    current_price: cur,
+  };
+}
 const DAILY_LIMIT = 500; // 2 years
 const INTERVAL_OPTIONS = [
   { label: "月K",  value: "1mo" },
@@ -134,21 +176,21 @@ export default function App() {
     setChartInterval("1d");  // reset to daily on new search
 
     try {
-      const [klineRes, indRes, fundRes, sentRes, srRes] = await Promise.allSettled([
+      const [klineRes, indRes, fundRes, sentRes] = await Promise.allSettled([
         axios.get(`/api/stock/${sym}/kline`,       { params: { market, period: "daily", limit: DAILY_LIMIT } }),
         axios.get(`/api/stock/${sym}/indicators`,   { params: { market } }),
         axios.get(`/api/stock/${sym}/fundamental`,  { params: { market } }),
         axios.get(`/api/stock/${sym}/sentiment`,    { params: { market } }),
-        axios.get(`/api/stock/${sym}/sr`,           { params: { market } }),
       ]);
 
       if (klineRes.status === "fulfilled") {
+        const dailyCandles = klineRes.value.data;
         setStockData({
           symbol,
           market,
-          candles:    klineRes.value.data,
+          candles:    dailyCandles,
           indicators: indRes.status === "fulfilled" ? indRes.value.data : {},
-          sr:         srRes.status  === "fulfilled" ? srRes.value.data  : null,
+          sr:         calculateSR(dailyCandles),   // computed client-side, always works
         });
         startQuotePolling(sym, market);
       } else {
