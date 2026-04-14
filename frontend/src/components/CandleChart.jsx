@@ -177,7 +177,8 @@ export default function CandleChart({ data, quote = null, interval = "1d", intra
       });
       srLinesRef.current.push(line);
     });
-  }, [activeIndicators.sr, sr]);
+  // candles 加入 deps：每次 chart 重建後重新畫 SR 線
+  }, [activeIndicators.sr, sr, candles]);
 
   // ── Live last-candle update (daily mode only) ─────────────────────────────
   // When quote arrives with today's OHLC, patch the last bar in-place so it

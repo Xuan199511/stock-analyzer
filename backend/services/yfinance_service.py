@@ -143,11 +143,21 @@ def get_quote(symbol: str, market: str) -> dict:
 
     def _fetch(yf_symbol: str) -> dict | None:
         try:
-            fi = yf.Ticker(yf_symbol).fast_info
+            ticker = yf.Ticker(yf_symbol)
+            fi     = ticker.fast_info
+
             price      = fi.last_price
             prev_close = fi.previous_close
+
+            # Fallback: fast_info sometimes returns None outside market hours —
+            # use the last two daily bars instead.
             if price is None or prev_close is None:
-                return None
+                hist = ticker.history(period="5d", interval="1d", auto_adjust=True)
+                if hist.empty:
+                    return None
+                price      = float(hist["Close"].iloc[-1])
+                prev_close = float(hist["Close"].iloc[-2]) if len(hist) >= 2 else price
+
             price      = float(price)
             prev_close = float(prev_close)
             change     = round(price - prev_close, 4)
@@ -157,10 +167,10 @@ def get_quote(symbol: str, market: str) -> dict:
                 "prev_close": round(prev_close, 2),
                 "change":     change,
                 "change_pct": change_pct,
-                "volume":     int(fi.last_volume) if fi.last_volume else None,
-                "day_open":   _safe(getattr(fi, "open",      None)),
-                "day_high":   _safe(getattr(fi, "day_high",  None)),
-                "day_low":    _safe(getattr(fi, "day_low",   None)),
+                "volume":     int(fi.last_volume) if getattr(fi, "last_volume", None) else None,
+                "day_open":   _safe(getattr(fi, "open",     None)),
+                "day_high":   _safe(getattr(fi, "day_high", None)),
+                "day_low":    _safe(getattr(fi, "day_low",  None)),
                 "updated_at": datetime.now(tz=tz_taipei).strftime("%H:%M:%S"),
             }
         except Exception as e:
