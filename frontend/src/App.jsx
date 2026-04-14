@@ -28,7 +28,7 @@ export default function App() {
   const [market,   setMarket]   = useState("tw");
   const [symbol,   setSymbol]   = useState("2330");
   const [limit,    setLimit]    = useState(120);
-  const [interval, setInterval] = useState("1d");
+  const [interval, setChartInterval] = useState("1d");
 
   // Daily data (set once per search)
   const [stockData,       setStockData]       = useState(null);
@@ -131,7 +131,7 @@ export default function App() {
     setSentimentData(null);
     setQuoteData(null);
     stopIntradayPolling();
-    setInterval("1d");  // reset to daily on new search
+    setChartInterval("1d");  // reset to daily on new search
 
     try {
       const [klineRes, indRes, fundRes, sentRes, srRes] = await Promise.allSettled([
@@ -239,7 +239,7 @@ export default function App() {
             <div className="flex rounded-lg overflow-hidden border border-[#30363d]">
               {INTERVAL_OPTIONS.map((opt) => (
                 <button key={opt.value} type="button"
-                  onClick={() => setInterval(opt.value)}
+                  onClick={() => setChartInterval(opt.value)}
                   disabled={!stockData && opt.value !== "1d"}
                   className={`px-3 py-2 text-xs font-medium transition-colors disabled:opacity-40 ${
                     interval === opt.value
