@@ -7,27 +7,24 @@ import BacktestPanel from "./components/BacktestPanel";
 import ScanPanel from "./components/ScanPanel";
 
 const DEFAULT_SYMBOLS = { tw: "2330", us: "AAPL" };
-const LIMIT_OPTIONS = [
-  { label: "1 個月",  value: 22  },
-  { label: "3 個月",  value: 66  },
-  { label: "6 個月",  value: 120 },
-  { label: "1 年",    value: 250 },
-  { label: "2 年",    value: 500 },
-];
+const DAILY_LIMIT = 500; // 2 years
 const INTERVAL_OPTIONS = [
+  { label: "月K",  value: "1mo" },
+  { label: "周K",  value: "1wk" },
   { label: "日K",  value: "1d"  },
   { label: "60m",  value: "60m" },
   { label: "15m",  value: "15m" },
   { label: "5m",   value: "5m"  },
   { label: "1m",   value: "1m"  },
 ];
+// Intervals that poll every 60 s; weekly/monthly don't need auto-refresh
+const SHORT_INTRADAY = new Set(["60m", "15m", "5m", "1m"]);
 
 export default function App() {
   const [tab,    setTab]    = useState("analyze");
 
   const [market,   setMarket]   = useState("tw");
   const [symbol,   setSymbol]   = useState("2330");
-  const [limit,    setLimit]    = useState(120);
   const [interval, setChartInterval] = useState("1d");
 
   // Daily data (set once per search)
@@ -84,12 +81,15 @@ export default function App() {
 
   const startIntradayPolling = useCallback((sym, mkt, ivl) => {
     liveRef.current.interval = ivl;
-    if (intradayTimer.current) clearInterval(intradayTimer.current);
+    if (intradayTimer.current) { clearInterval(intradayTimer.current); intradayTimer.current = null; }
     fetchIntraday(sym, mkt, ivl);
-    intradayTimer.current = setInterval(
-      () => fetchIntraday(liveRef.current.sym, liveRef.current.mkt, liveRef.current.interval),
-      60_000,
-    );
+    // Only auto-refresh short intraday intervals; weekly/monthly don't need it
+    if (SHORT_INTRADAY.has(ivl)) {
+      intradayTimer.current = setInterval(
+        () => fetchIntraday(liveRef.current.sym, liveRef.current.mkt, liveRef.current.interval),
+        60_000,
+      );
+    }
   }, [fetchIntraday]);
 
   const stopIntradayPolling = useCallback(() => {
@@ -135,7 +135,7 @@ export default function App() {
 
     try {
       const [klineRes, indRes, fundRes, sentRes, srRes] = await Promise.allSettled([
-        axios.get(`/api/stock/${sym}/kline`,       { params: { market, period: "daily", limit } }),
+        axios.get(`/api/stock/${sym}/kline`,       { params: { market, period: "daily", limit: DAILY_LIMIT } }),
         axios.get(`/api/stock/${sym}/indicators`,   { params: { market } }),
         axios.get(`/api/stock/${sym}/fundamental`,  { params: { market } }),
         axios.get(`/api/stock/${sym}/sentiment`,    { params: { market } }),
@@ -252,24 +252,6 @@ export default function App() {
               ))}
             </div>
           </div>
-
-          {/* K線筆數 — only shown in daily mode */}
-          {interval === "1d" && (
-            <div className="flex flex-col gap-1">
-              <label className="text-xs text-[#8b949e]">K 線筆數</label>
-              <div className="flex rounded-lg overflow-hidden border border-[#30363d]">
-                {LIMIT_OPTIONS.map((opt) => (
-                  <button key={opt.value} type="button" onClick={() => setLimit(opt.value)}
-                    className={`px-3 py-2 text-xs font-medium transition-colors ${
-                      limit === opt.value ? "bg-[#1f6feb] text-white" : "bg-[#21262d] text-[#8b949e] hover:text-white"
-                    }`}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
 
           {/* Submit */}
           <button type="submit" disabled={loading}

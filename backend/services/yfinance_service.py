@@ -182,12 +182,13 @@ def get_intraday(symbol: str, market: str, interval: str = "5m") -> pd.DataFrame
     Returns a DataFrame with columns: date (Unix timestamp int), open, high, low, close, volume
     The `date` column is seconds-since-epoch so lightweight-charts can render intraday bars.
     """
-    valid = {"1m", "5m", "15m", "60m"}
+    valid = {"1m", "5m", "15m", "60m", "1wk", "1mo"}
     if interval not in valid:
         interval = "5m"
 
     # yfinance max-period limits per interval
-    period = "2d" if interval == "1m" else "5d"
+    period_map = {"1m": "2d", "5m": "5d", "15m": "5d", "60m": "5d", "1wk": "5y", "1mo": "5y"}
+    period = period_map.get(interval, "5d")
 
     def _fetch(yf_sym: str) -> pd.DataFrame:
         try:

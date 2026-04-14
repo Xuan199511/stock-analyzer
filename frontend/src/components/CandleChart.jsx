@@ -237,7 +237,8 @@ export default function CandleChart({ data, quote = null, interval = "1d", intra
                     ? <span className="w-1.5 h-1.5 rounded-full bg-[#58a6ff] animate-pulse inline-block" />
                     : <span className="w-1.5 h-1.5 rounded-full bg-[#26a69a] inline-block" />
                   }
-                  {interval} · 每分鐘更新
+                  {interval}
+                  {["1m","5m","15m","60m"].includes(interval) && " · 每分鐘更新"}
                 </span>
               )}
               {!isIntraday && isLive && (
