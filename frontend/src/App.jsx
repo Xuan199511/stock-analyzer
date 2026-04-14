@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import axios from "axios";
 import CandleChart from "./components/CandleChart";
 import FundamentalPanel from "./components/FundamentalPanel";
@@ -14,53 +14,110 @@ const LIMIT_OPTIONS = [
   { label: "1 年",    value: 250 },
   { label: "2 年",    value: 500 },
 ];
+const INTERVAL_OPTIONS = [
+  { label: "日K",  value: "1d"  },
+  { label: "60m",  value: "60m" },
+  { label: "15m",  value: "15m" },
+  { label: "5m",   value: "5m"  },
+  { label: "1m",   value: "1m"  },
+];
 
 export default function App() {
-  const [tab,    setTab]    = useState("analyze");   // "analyze" | "backtest"
+  const [tab,    setTab]    = useState("analyze");
 
-  const [market, setMarket] = useState("tw");
-  const [symbol, setSymbol] = useState("2330");
-  const [limit,  setLimit]  = useState(120);
+  const [market,   setMarket]   = useState("tw");
+  const [symbol,   setSymbol]   = useState("2330");
+  const [limit,    setLimit]    = useState(120);
+  const [interval, setInterval] = useState("1d");
 
+  // Daily data (set once per search)
   const [stockData,       setStockData]       = useState(null);
   const [fundamentalData, setFundamentalData] = useState(null);
   const [sentimentData,   setSentimentData]   = useState(null);
-  const [quoteData,       setQuoteData]       = useState(null);
+  // Intraday candles (replaced on each refresh)
+  const [intradayCandles, setIntradayCandles] = useState([]);
+  // Live quote (refreshed every 30 s)
+  const [quoteData, setQuoteData] = useState(null);
 
-  const [loading, setLoading] = useState(false);
-  const [error,   setError]   = useState(null);
+  const [loading,         setLoading]         = useState(false);
+  const [intradayLoading, setIntradayLoading] = useState(false);
+  const [error,           setError]           = useState(null);
 
-  // Keep track of what symbol/market the live quote is for, so the interval
-  // always refreshes the *current* stock, not a stale closure value.
-  const liveRef    = useRef({ sym: null, market: null });
-  const intervalRef = useRef(null);
+  // Refs so interval callbacks always see current values without stale closures
+  const liveRef      = useRef({ sym: null, mkt: null, interval: "1d" });
+  const quoteTimer   = useRef(null);
+  const intradayTimer = useRef(null);
 
-  const fetchQuote = async (sym, mkt) => {
+  // ── Quote polling ─────────────────────────────────────────────────────────
+  const fetchQuote = useCallback(async (sym, mkt) => {
     try {
       const res = await axios.get(`/api/stock/${sym}/quote`, { params: { market: mkt } });
       setQuoteData(res.data);
-    } catch {
-      // Quote is best-effort — silent failure
+    } catch { /* silent */ }
+  }, []);
+
+  const startQuotePolling = useCallback((sym, mkt) => {
+    liveRef.current.sym = sym;
+    liveRef.current.mkt = mkt;
+    if (quoteTimer.current) clearInterval(quoteTimer.current);
+    fetchQuote(sym, mkt);
+    quoteTimer.current = setInterval(
+      () => fetchQuote(liveRef.current.sym, liveRef.current.mkt),
+      30_000,
+    );
+  }, [fetchQuote]);
+
+  // ── Intraday fetch + polling ──────────────────────────────────────────────
+  const fetchIntraday = useCallback(async (sym, mkt, ivl) => {
+    try {
+      setIntradayLoading(true);
+      const res = await axios.get(`/api/stock/${sym}/intraday`, {
+        params: { market: mkt, interval: ivl },
+      });
+      setIntradayCandles(res.data);
+    } catch (e) {
+      console.error("intraday fetch error", e);
+    } finally {
+      setIntradayLoading(false);
     }
-  };
+  }, []);
 
-  // Start / restart the 30-second auto-refresh whenever a new stock is loaded
-  const startQuotePolling = (sym, mkt) => {
-    liveRef.current = { sym, market: mkt };
-    if (intervalRef.current) clearInterval(intervalRef.current);
-    fetchQuote(sym, mkt);                    // immediate first fetch
-    intervalRef.current = setInterval(() => {
-      fetchQuote(liveRef.current.sym, liveRef.current.market);
-    }, 30_000);
-  };
+  const startIntradayPolling = useCallback((sym, mkt, ivl) => {
+    liveRef.current.interval = ivl;
+    if (intradayTimer.current) clearInterval(intradayTimer.current);
+    fetchIntraday(sym, mkt, ivl);
+    intradayTimer.current = setInterval(
+      () => fetchIntraday(liveRef.current.sym, liveRef.current.mkt, liveRef.current.interval),
+      60_000,
+    );
+  }, [fetchIntraday]);
 
-  // Clean up on unmount
-  useEffect(() => () => { if (intervalRef.current) clearInterval(intervalRef.current); }, []);
+  const stopIntradayPolling = useCallback(() => {
+    if (intradayTimer.current) { clearInterval(intradayTimer.current); intradayTimer.current = null; }
+    setIntradayCandles([]);
+  }, []);
 
-  const handleMarketChange = (m) => {
-    setMarket(m);
-    setSymbol(DEFAULT_SYMBOLS[m]);
-  };
+  // Clean up all timers on unmount
+  useEffect(() => () => {
+    if (quoteTimer.current)    clearInterval(quoteTimer.current);
+    if (intradayTimer.current) clearInterval(intradayTimer.current);
+  }, []);
+
+  // ── React to interval change (only when a stock is already loaded) ────────
+  useEffect(() => {
+    if (!stockData) return;
+    const { sym, mkt } = liveRef.current;
+    if (!sym) return;
+    if (interval === "1d") {
+      stopIntradayPolling();
+    } else {
+      startIntradayPolling(sym, mkt, interval);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [interval]);
+
+  // ── Handlers ──────────────────────────────────────────────────────────────
+  const handleMarketChange = (m) => { setMarket(m); setSymbol(DEFAULT_SYMBOLS[m]); };
 
   const handleSearch = async (e) => {
     e.preventDefault();
@@ -73,18 +130,18 @@ export default function App() {
     setFundamentalData(null);
     setSentimentData(null);
     setQuoteData(null);
+    stopIntradayPolling();
+    setInterval("1d");  // reset to daily on new search
 
     try {
-      // ── 同時發出五個請求 ──────────────────────────────────────────────────
       const [klineRes, indRes, fundRes, sentRes, srRes] = await Promise.allSettled([
-        axios.get(`/api/stock/${sym}/kline`,      { params: { market, period: "daily", limit } }),
-        axios.get(`/api/stock/${sym}/indicators`,  { params: { market } }),
+        axios.get(`/api/stock/${sym}/kline`,       { params: { market, period: "daily", limit } }),
+        axios.get(`/api/stock/${sym}/indicators`,   { params: { market } }),
         axios.get(`/api/stock/${sym}/fundamental`,  { params: { market } }),
         axios.get(`/api/stock/${sym}/sentiment`,    { params: { market } }),
         axios.get(`/api/stock/${sym}/sr`,           { params: { market } }),
       ]);
 
-      // K 線是必要資料，失敗就顯示錯誤
       if (klineRes.status === "fulfilled") {
         setStockData({
           symbol,
@@ -95,9 +152,7 @@ export default function App() {
         });
         startQuotePolling(sym, market);
       } else {
-        setError(
-          klineRes.reason?.response?.data?.detail || klineRes.reason?.message
-        );
+        setError(klineRes.reason?.response?.data?.detail || klineRes.reason?.message);
       }
 
       if (fundRes.status === "fulfilled") setFundamentalData(fundRes.value.data);
@@ -108,6 +163,20 @@ export default function App() {
       setLoading(false);
     }
   };
+
+  // Candles passed to CandleChart: intraday overrides daily when active
+  const chartCandles = interval !== "1d" && intradayCandles.length > 0
+    ? intradayCandles
+    : stockData?.candles ?? [];
+
+  const chartData = stockData
+    ? {
+        ...stockData,
+        candles:    chartCandles,
+        // Hide daily indicators in intraday mode (not meaningful on 1-5 bar windows)
+        indicators: interval === "1d" ? stockData.indicators : {},
+      }
+    : null;
 
   return (
     <div className="min-h-screen bg-[#0d1117] text-[#e6edf3]">
@@ -128,9 +197,7 @@ export default function App() {
           ].map(({ key, label }) => (
             <button key={key} type="button" onClick={() => setTab(key)}
               className={`px-4 py-1.5 text-sm font-medium transition-colors ${
-                tab === key
-                  ? "bg-[#1f6feb] text-white"
-                  : "bg-[#21262d] text-[#8b949e] hover:text-white"
+                tab === key ? "bg-[#1f6feb] text-white" : "bg-[#21262d] text-[#8b949e] hover:text-white"
               }`}
             >
               {label}
@@ -139,20 +206,15 @@ export default function App() {
         </div>
       </header>
 
-      {/* Search Bar — only shown on analyze tab */}
+      {/* Search Bar */}
       <div className={`bg-[#161b22] border-b border-[#30363d] px-6 py-4 ${tab === "analyze" ? "" : "hidden"}`}>
         <form onSubmit={handleSearch} className="flex flex-wrap gap-3 items-end">
           {/* Market toggle */}
           <div className="flex rounded-lg overflow-hidden border border-[#30363d]">
             {["tw", "us"].map((m) => (
-              <button
-                key={m}
-                type="button"
-                onClick={() => handleMarketChange(m)}
+              <button key={m} type="button" onClick={() => handleMarketChange(m)}
                 className={`px-4 py-2 text-sm font-medium transition-colors ${
-                  market === m
-                    ? "bg-[#1f6feb] text-white"
-                    : "bg-[#21262d] text-[#8b949e] hover:text-white"
+                  market === m ? "bg-[#1f6feb] text-white" : "bg-[#21262d] text-[#8b949e] hover:text-white"
                 }`}
               >
                 {m === "tw" ? "🇹🇼 台股" : "🇺🇸 美股"}
@@ -164,25 +226,23 @@ export default function App() {
           <div className="flex flex-col gap-1">
             <label className="text-xs text-[#8b949e]">股票代號</label>
             <input
-              type="text"
-              value={symbol}
+              type="text" value={symbol}
               onChange={(e) => setSymbol(e.target.value.toUpperCase())}
               placeholder={market === "tw" ? "e.g. 2330" : "e.g. AAPL"}
               className="bg-[#21262d] border border-[#30363d] rounded-lg px-3 py-2 text-sm w-32 focus:outline-none focus:border-[#1f6feb] focus:ring-1 focus:ring-[#1f6feb]"
             />
           </div>
 
-          {/* Period / limit selector */}
+          {/* Interval selector */}
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-[#8b949e]">K 線筆數</label>
+            <label className="text-xs text-[#8b949e]">週期</label>
             <div className="flex rounded-lg overflow-hidden border border-[#30363d]">
-              {LIMIT_OPTIONS.map((opt) => (
-                <button
-                  key={opt.value}
-                  type="button"
-                  onClick={() => setLimit(opt.value)}
-                  className={`px-3 py-2 text-xs font-medium transition-colors ${
-                    limit === opt.value
+              {INTERVAL_OPTIONS.map((opt) => (
+                <button key={opt.value} type="button"
+                  onClick={() => setInterval(opt.value)}
+                  disabled={!stockData && opt.value !== "1d"}
+                  className={`px-3 py-2 text-xs font-medium transition-colors disabled:opacity-40 ${
+                    interval === opt.value
                       ? "bg-[#1f6feb] text-white"
                       : "bg-[#21262d] text-[#8b949e] hover:text-white"
                   }`}
@@ -193,10 +253,26 @@ export default function App() {
             </div>
           </div>
 
+          {/* K線筆數 — only shown in daily mode */}
+          {interval === "1d" && (
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-[#8b949e]">K 線筆數</label>
+              <div className="flex rounded-lg overflow-hidden border border-[#30363d]">
+                {LIMIT_OPTIONS.map((opt) => (
+                  <button key={opt.value} type="button" onClick={() => setLimit(opt.value)}
+                    className={`px-3 py-2 text-xs font-medium transition-colors ${
+                      limit === opt.value ? "bg-[#1f6feb] text-white" : "bg-[#21262d] text-[#8b949e] hover:text-white"
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Submit */}
-          <button
-            type="submit"
-            disabled={loading}
+          <button type="submit" disabled={loading}
             className="px-5 py-2 bg-[#238636] hover:bg-[#2ea043] disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
           >
             {loading ? "載入中..." : "查詢"}
@@ -206,23 +282,17 @@ export default function App() {
 
       {/* Main Content */}
       <main className="p-6 space-y-6">
-        {/* ── Backtest tab ── */}
         {tab === "backtest" && <BacktestPanel />}
+        {tab === "scan"     && <ScanPanel />}
 
-        {/* ── Scan tab ── */}
-        {tab === "scan" && <ScanPanel />}
-
-        {/* ── Analyze tab ── */}
         {tab === "analyze" && (
           <>
-            {/* Error */}
             {error && (
               <div className="bg-[#3d1f1f] border border-[#f85149] rounded-lg p-4 text-[#f85149] text-sm">
                 ⚠ {error}
               </div>
             )}
 
-            {/* Loading */}
             {loading && (
               <div className="flex flex-col items-center justify-center py-20 gap-4">
                 <div className="spinner" />
@@ -230,18 +300,22 @@ export default function App() {
               </div>
             )}
 
-            {/* Charts */}
-            {!loading && stockData && <CandleChart data={stockData} quote={quoteData} />}
+            {!loading && chartData && (
+              <CandleChart
+                data={chartData}
+                quote={quoteData}
+                interval={interval}
+                intradayLoading={intradayLoading}
+              />
+            )}
 
-            {/* Bottom panels */}
             {!loading && (fundamentalData || sentimentData) && (
               <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
                 {fundamentalData && <FundamentalPanel data={fundamentalData} />}
-                {sentimentData && <SentimentPanel data={sentimentData} />}
+                {sentimentData   && <SentimentPanel  data={sentimentData}   />}
               </div>
             )}
 
-            {/* Empty state */}
             {!loading && !stockData && !error && (
               <div className="flex flex-col items-center justify-center py-24 text-[#8b949e]">
                 <span className="text-5xl mb-4">📊</span>

@@ -127,10 +127,19 @@ def get_quote(symbol: str, market: str) -> dict:
           "change":     float,
           "change_pct": float,   # percent, e.g. 1.23 = +1.23%
           "volume":     int | None,
+          "day_open":   float | None,
+          "day_high":   float | None,
+          "day_low":    float | None,
           "updated_at": str,     # HH:MM:SS in Asia/Taipei
         }
     """
     tz_taipei = pytz.timezone("Asia/Taipei")
+
+    def _safe(v):
+        try:
+            return round(float(v), 2) if v is not None else None
+        except Exception:
+            return None
 
     def _fetch(yf_symbol: str) -> dict | None:
         try:
@@ -149,6 +158,9 @@ def get_quote(symbol: str, market: str) -> dict:
                 "change":     change,
                 "change_pct": change_pct,
                 "volume":     int(fi.last_volume) if fi.last_volume else None,
+                "day_open":   _safe(getattr(fi, "open",      None)),
+                "day_high":   _safe(getattr(fi, "day_high",  None)),
+                "day_low":    _safe(getattr(fi, "day_low",   None)),
                 "updated_at": datetime.now(tz=tz_taipei).strftime("%H:%M:%S"),
             }
         except Exception as e:
@@ -161,6 +173,56 @@ def get_quote(symbol: str, market: str) -> dict:
         result = _fetch(symbol)
 
     return result or {"error": f"無法取得 {symbol} 的即時報價"}
+
+
+def get_intraday(symbol: str, market: str, interval: str = "5m") -> pd.DataFrame:
+    """Fetch intraday OHLCV bars via yfinance.
+
+    Supported intervals: 1m, 5m, 15m, 60m
+    Returns a DataFrame with columns: date (Unix timestamp int), open, high, low, close, volume
+    The `date` column is seconds-since-epoch so lightweight-charts can render intraday bars.
+    """
+    valid = {"1m", "5m", "15m", "60m"}
+    if interval not in valid:
+        interval = "5m"
+
+    # yfinance max-period limits per interval
+    period = "2d" if interval == "1m" else "5d"
+
+    def _fetch(yf_sym: str) -> pd.DataFrame:
+        try:
+            df = yf.Ticker(yf_sym).history(period=period, interval=interval, auto_adjust=True)
+            return df
+        except Exception as e:
+            print(f"[yfinance] get_intraday error for {yf_sym}: {e}")
+            return pd.DataFrame()
+
+    if market == "tw":
+        df = _fetch(f"{symbol}.TW")
+        if df.empty:
+            df = _fetch(f"{symbol}.TWO")
+    else:
+        df = _fetch(symbol)
+
+    if df.empty:
+        return pd.DataFrame()
+
+    df = df.reset_index()
+    date_col = "Datetime" if "Datetime" in df.columns else "Date"
+    df = df.rename(columns={
+        date_col: "date", "Open": "open", "High": "high",
+        "Low": "low", "Close": "close", "Volume": "volume",
+    })
+
+    # Strip timezone, convert to UTC Unix timestamp (seconds) for lightweight-charts
+    df["date"] = pd.to_datetime(df["date"])
+    if df["date"].dt.tz is not None:
+        df["date"] = df["date"].dt.tz_convert("UTC").dt.tz_localize(None)
+    df["date"] = (df["date"].astype("int64") // 10 ** 9).astype(int)
+
+    df = df.sort_values("date").reset_index(drop=True)
+    df = df.dropna(subset=["open", "close"])
+    return df[["date", "open", "high", "low", "close", "volume"]]
 
 
 def get_news_with_sentiment(symbol: str, limit: int = 15) -> list[dict]:

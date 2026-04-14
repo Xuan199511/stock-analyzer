@@ -10,7 +10,7 @@ const MA_COLORS = {
 // BB bands: backend returns bb.upper / bb.mid / bb.lower
 const BB_BANDS = ["upper", "mid", "lower"];
 
-export default function CandleChart({ data, quote = null }) {
+export default function CandleChart({ data, quote = null, interval = "1d", intradayLoading = false }) {
   const containerRef = useRef(null);
   const chartRef     = useRef(null);
   const seriesRef    = useRef({});
@@ -26,7 +26,9 @@ export default function CandleChart({ data, quote = null }) {
 
   const { candles = [], indicators = {}, sr = null, symbol, market } = data;
 
-  const toTime = (d) => d.slice(0, 10);
+  // Daily bars use date strings "YYYY-MM-DD"; intraday bars use Unix timestamps (int seconds)
+  const toTime = (d) => (typeof d === "number" ? d : d.slice(0, 10));
+  const isIntraday = interval !== "1d";
 
   // ── Build / rebuild chart whenever data changes ───────────────────────────
   useEffect(() => {
@@ -177,6 +179,30 @@ export default function CandleChart({ data, quote = null }) {
     });
   }, [activeIndicators.sr, sr]);
 
+  // ── Live last-candle update (daily mode only) ─────────────────────────────
+  // When quote arrives with today's OHLC, patch the last bar in-place so it
+  // reflects the current session without rebuilding the entire chart.
+  useEffect(() => {
+    const cs = seriesRef.current.candle;
+    if (!cs || !quote?.price || !candles.length || isIntraday) return;
+
+    const last = candles[candles.length - 1];
+    const lastDate = typeof last.date === "number"
+      ? new Date(last.date * 1000).toISOString().slice(0, 10)
+      : last.date.slice(0, 10);
+    const today = new Date().toISOString().slice(0, 10);
+    if (lastDate !== today) return;   // market hasn't opened today yet
+
+    cs.update({
+      time:  toTime(last.date),
+      open:  quote.day_open  ?? last.open,
+      high:  quote.day_high != null ? Math.max(last.high, quote.day_high) : last.high,
+      low:   quote.day_low  != null ? Math.min(last.low,  quote.day_low)  : last.low,
+      close: quote.price,
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quote]);
+
   const toggle = (key) => setActiveIndicators((prev) => ({ ...prev, [key]: !prev[key] }));
 
   const lastCandle = candles[candles.length - 1];
@@ -205,7 +231,16 @@ export default function CandleChart({ data, quote = null }) {
               <span className={`text-sm font-mono px-2 py-0.5 rounded ${displayChange >= 0 ? "bg-[#26a69a22] text-[#26a69a]" : "bg-[#ef535022] text-[#ef5350]"}`}>
                 {displayChange >= 0 ? "▲" : "▼"} {Math.abs(displayChange).toFixed(2)} ({Math.abs(displayPct).toFixed(2)}%)
               </span>
-              {isLive && (
+              {isIntraday && (
+                <span className="flex items-center gap-1 text-xs px-2 py-0.5 rounded bg-[#1f6feb22] border border-[#1f6feb] text-[#58a6ff]">
+                  {intradayLoading
+                    ? <span className="w-1.5 h-1.5 rounded-full bg-[#58a6ff] animate-pulse inline-block" />
+                    : <span className="w-1.5 h-1.5 rounded-full bg-[#26a69a] inline-block" />
+                  }
+                  {interval} · 每分鐘更新
+                </span>
+              )}
+              {!isIntraday && isLive && (
                 <span className="flex items-center gap-1 text-xs text-[#8b949e]">
                   <span className="w-1.5 h-1.5 rounded-full bg-[#26a69a] animate-pulse inline-block" />
                   即時 {quote.updated_at}
@@ -226,7 +261,8 @@ export default function CandleChart({ data, quote = null }) {
 
       {/* ── Indicator toggles ──────────────────────────────────────────────── */}
       <div className="px-5 py-2 flex flex-wrap gap-2 border-b border-[#21262d]">
-        {Object.entries(MA_COLORS).map(([key, color]) => (
+        {/* MA / BB / RSI / MACD only meaningful on daily data */}
+        {!isIntraday && Object.entries(MA_COLORS).map(([key, color]) => (
           <button
             key={key}
             onClick={() => toggle(key)}
@@ -238,14 +274,16 @@ export default function CandleChart({ data, quote = null }) {
             {key.toUpperCase()}
           </button>
         ))}
-        <button
-          onClick={() => toggle("bb")}
-          className={`px-3 py-1 rounded text-xs font-medium transition-all border ${
-            activeIndicators.bb ? "bg-[#58a6ff22] border-[#58a6ff] text-[#58a6ff]" : "text-[#8b949e] border-[#30363d]"
-          }`}
-        >
-          Bollinger
-        </button>
+        {!isIntraday && (
+          <button
+            onClick={() => toggle("bb")}
+            className={`px-3 py-1 rounded text-xs font-medium transition-all border ${
+              activeIndicators.bb ? "bg-[#58a6ff22] border-[#58a6ff] text-[#58a6ff]" : "text-[#8b949e] border-[#30363d]"
+            }`}
+          >
+            Bollinger
+          </button>
+        )}
         <button
           onClick={() => toggle("volume")}
           className={`px-3 py-1 rounded text-xs font-medium transition-all border ${
@@ -254,22 +292,26 @@ export default function CandleChart({ data, quote = null }) {
         >
           Volume
         </button>
-        <button
-          onClick={() => setShowRSI((v) => !v)}
-          className={`px-3 py-1 rounded text-xs font-medium transition-all border ${
-            showRSI ? "bg-[#a78bfa22] border-[#a78bfa] text-[#a78bfa]" : "text-[#8b949e] border-[#30363d]"
-          }`}
-        >
-          RSI
-        </button>
-        <button
-          onClick={() => setShowMACD((v) => !v)}
-          className={`px-3 py-1 rounded text-xs font-medium transition-all border ${
-            showMACD ? "bg-[#fb923c22] border-[#fb923c] text-[#fb923c]" : "text-[#8b949e] border-[#30363d]"
-          }`}
-        >
-          MACD
-        </button>
+        {!isIntraday && (
+          <button
+            onClick={() => setShowRSI((v) => !v)}
+            className={`px-3 py-1 rounded text-xs font-medium transition-all border ${
+              showRSI ? "bg-[#a78bfa22] border-[#a78bfa] text-[#a78bfa]" : "text-[#8b949e] border-[#30363d]"
+            }`}
+          >
+            RSI
+          </button>
+        )}
+        {!isIntraday && (
+          <button
+            onClick={() => setShowMACD((v) => !v)}
+            className={`px-3 py-1 rounded text-xs font-medium transition-all border ${
+              showMACD ? "bg-[#fb923c22] border-[#fb923c] text-[#fb923c]" : "text-[#8b949e] border-[#30363d]"
+            }`}
+          >
+            MACD
+          </button>
+        )}
         <button
           onClick={() => toggle("sr")}
           disabled={!sr}

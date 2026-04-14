@@ -249,6 +249,40 @@ async def get_stock_sentiment(
     return {"symbol": sym, "market": market.upper(), **result}
 
 
+# ── NEW: GET /api/stock/{symbol}/intraday ───────────────────────────────────
+
+@router.get("/{symbol}/intraday")
+async def get_intraday(
+    symbol:   str,
+    market:   str = Query("TW",  description="TW 或 US"),
+    interval: str = Query("5m",  description="1m | 5m | 15m | 60m"),
+):
+    """分鐘 / 小時 K 線，透過 yfinance 取得（約 15 分鐘延遲）。
+
+    - 1m  → 最近 2 個交易日
+    - 5m / 15m / 60m → 最近 5 個交易日
+
+    回傳格式：[{date (Unix 秒), open, high, low, close, volume}, ...]
+    date 為 Unix timestamp（整數秒），供 lightweight-charts 直接使用。
+    """
+    import asyncio
+    mkt = _resolve_market(market)
+    df  = await asyncio.to_thread(yfinance_service.get_intraday, symbol.upper(), mkt, interval)
+    if df.empty:
+        raise HTTPException(status_code=404, detail=f"找不到 {symbol}（{market}）的分鐘資料")
+    return [
+        {
+            "date":   int(row["date"]),
+            "open":   round(float(row["open"]),  4),
+            "high":   round(float(row["high"]),  4),
+            "low":    round(float(row["low"]),   4),
+            "close":  round(float(row["close"]), 4),
+            "volume": int(row["volume"]),
+        }
+        for _, row in df.iterrows()
+    ]
+
+
 # ── NEW: GET /api/stock/{symbol}/quote ──────────────────────────────────────
 
 @router.get("/{symbol}/quote")
