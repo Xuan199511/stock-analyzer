@@ -2,6 +2,8 @@
 import yfinance as yf
 import pandas as pd
 from textblob import TextBlob
+from datetime import datetime
+import pytz
 
 
 def get_stock_price(symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
@@ -110,6 +112,55 @@ def get_fundamental(symbol: str) -> dict:
     except Exception as e:
         print(f"[yfinance] get_fundamental error: {e}")
         return {"symbol": symbol, "error": str(e)}
+
+
+def get_quote(symbol: str, market: str) -> dict:
+    """Fetch the latest real-time / delayed quote via yfinance fast_info.
+
+    TW stocks use the '.TW' suffix (TSE). If that returns no price, falls back
+    to '.TWO' (OTC).  US stocks use the plain symbol.
+
+    Returns:
+        {
+          "price":      float,
+          "prev_close": float,
+          "change":     float,
+          "change_pct": float,   # percent, e.g. 1.23 = +1.23%
+          "volume":     int | None,
+          "updated_at": str,     # HH:MM:SS in Asia/Taipei
+        }
+    """
+    tz_taipei = pytz.timezone("Asia/Taipei")
+
+    def _fetch(yf_symbol: str) -> dict | None:
+        try:
+            fi = yf.Ticker(yf_symbol).fast_info
+            price      = fi.last_price
+            prev_close = fi.previous_close
+            if price is None or prev_close is None:
+                return None
+            price      = float(price)
+            prev_close = float(prev_close)
+            change     = round(price - prev_close, 4)
+            change_pct = round((price - prev_close) / prev_close * 100, 2) if prev_close else 0.0
+            return {
+                "price":      round(price, 2),
+                "prev_close": round(prev_close, 2),
+                "change":     change,
+                "change_pct": change_pct,
+                "volume":     int(fi.last_volume) if fi.last_volume else None,
+                "updated_at": datetime.now(tz=tz_taipei).strftime("%H:%M:%S"),
+            }
+        except Exception as e:
+            print(f"[yfinance] get_quote error for {yf_symbol}: {e}")
+            return None
+
+    if market == "tw":
+        result = _fetch(f"{symbol}.TW") or _fetch(f"{symbol}.TWO")
+    else:
+        result = _fetch(symbol)
+
+    return result or {"error": f"無法取得 {symbol} 的即時報價"}
 
 
 def get_news_with_sentiment(symbol: str, limit: int = 15) -> list[dict]:

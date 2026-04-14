@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import axios from "axios";
 import CandleChart from "./components/CandleChart";
 import FundamentalPanel from "./components/FundamentalPanel";
@@ -25,9 +25,37 @@ export default function App() {
   const [stockData,       setStockData]       = useState(null);
   const [fundamentalData, setFundamentalData] = useState(null);
   const [sentimentData,   setSentimentData]   = useState(null);
+  const [quoteData,       setQuoteData]       = useState(null);
 
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState(null);
+
+  // Keep track of what symbol/market the live quote is for, so the interval
+  // always refreshes the *current* stock, not a stale closure value.
+  const liveRef    = useRef({ sym: null, market: null });
+  const intervalRef = useRef(null);
+
+  const fetchQuote = async (sym, mkt) => {
+    try {
+      const res = await axios.get(`/api/stock/${sym}/quote`, { params: { market: mkt } });
+      setQuoteData(res.data);
+    } catch {
+      // Quote is best-effort — silent failure
+    }
+  };
+
+  // Start / restart the 30-second auto-refresh whenever a new stock is loaded
+  const startQuotePolling = (sym, mkt) => {
+    liveRef.current = { sym, market: mkt };
+    if (intervalRef.current) clearInterval(intervalRef.current);
+    fetchQuote(sym, mkt);                    // immediate first fetch
+    intervalRef.current = setInterval(() => {
+      fetchQuote(liveRef.current.sym, liveRef.current.market);
+    }, 30_000);
+  };
+
+  // Clean up on unmount
+  useEffect(() => () => { if (intervalRef.current) clearInterval(intervalRef.current); }, []);
 
   const handleMarketChange = (m) => {
     setMarket(m);
@@ -44,6 +72,7 @@ export default function App() {
     setStockData(null);
     setFundamentalData(null);
     setSentimentData(null);
+    setQuoteData(null);
 
     try {
       // ── 同時發出五個請求 ──────────────────────────────────────────────────
@@ -64,6 +93,7 @@ export default function App() {
           indicators: indRes.status === "fulfilled" ? indRes.value.data : {},
           sr:         srRes.status  === "fulfilled" ? srRes.value.data  : null,
         });
+        startQuotePolling(sym, market);
       } else {
         setError(
           klineRes.reason?.response?.data?.detail || klineRes.reason?.message
@@ -201,7 +231,7 @@ export default function App() {
             )}
 
             {/* Charts */}
-            {!loading && stockData && <CandleChart data={stockData} />}
+            {!loading && stockData && <CandleChart data={stockData} quote={quoteData} />}
 
             {/* Bottom panels */}
             {!loading && (fundamentalData || sentimentData) && (

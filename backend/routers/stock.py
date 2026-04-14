@@ -249,6 +249,35 @@ async def get_stock_sentiment(
     return {"symbol": sym, "market": market.upper(), **result}
 
 
+# ── NEW: GET /api/stock/{symbol}/quote ──────────────────────────────────────
+
+@router.get("/{symbol}/quote")
+async def get_quote(
+    symbol: str,
+    market: str = Query("TW", description="TW 或 US"),
+):
+    """即時（或延遲 15 分鐘）報價，透過 yfinance fast_info 取得。
+
+    TW 股票先嘗試 TSE（.TW），失敗再嘗試 OTC（.TWO）。
+
+    回傳格式：
+    {
+      "price":      float,
+      "prev_close": float,
+      "change":     float,
+      "change_pct": float,   # 漲跌幅 %
+      "volume":     int | null,
+      "updated_at": "HH:MM:SS",  # 台北時間
+    }
+    """
+    import asyncio
+    mkt    = _resolve_market(market)
+    result = await asyncio.to_thread(yfinance_service.get_quote, symbol.upper(), mkt)
+    if "error" in result:
+        raise HTTPException(status_code=503, detail=result["error"])
+    return result
+
+
 # ── NEW: GET /api/stock/{symbol}/sr ─────────────────────────────────────────
 
 @router.get("/{symbol}/sr")

@@ -10,7 +10,7 @@ const MA_COLORS = {
 // BB bands: backend returns bb.upper / bb.mid / bb.lower
 const BB_BANDS = ["upper", "mid", "lower"];
 
-export default function CandleChart({ data }) {
+export default function CandleChart({ data, quote = null }) {
   const containerRef = useRef(null);
   const chartRef     = useRef(null);
   const seriesRef    = useRef({});
@@ -181,8 +181,12 @@ export default function CandleChart({ data }) {
 
   const lastCandle = candles[candles.length - 1];
   const prevClose  = candles.length > 1 ? candles[candles.length - 2].close : lastCandle?.open;
-  const change     = lastCandle ? lastCandle.close - prevClose : 0;
-  const changePct  = prevClose  ? (change / prevClose) * 100   : 0;
+
+  // Prefer live quote; fall back to last candle
+  const displayPrice  = quote?.price      ?? lastCandle?.close;
+  const displayChange = quote?.change     ?? (lastCandle ? lastCandle.close - prevClose : 0);
+  const displayPct    = quote?.change_pct ?? (prevClose  ? (displayChange / prevClose) * 100 : 0);
+  const isLive        = !!quote?.price;
 
   return (
     <div className="bg-[#161b22] border border-[#30363d] rounded-xl overflow-hidden">
@@ -193,14 +197,20 @@ export default function CandleChart({ data }) {
             <span className="text-lg font-bold text-white">{symbol}</span>
             <span className="ml-2 text-xs text-[#8b949e] uppercase">{market}</span>
           </div>
-          {lastCandle && (
+          {displayPrice != null && (
             <div className="flex items-center gap-3">
-              <span className={`text-xl font-mono font-bold ${change >= 0 ? "text-[#26a69a]" : "text-[#ef5350]"}`}>
-                {lastCandle.close.toFixed(2)}
+              <span className={`text-xl font-mono font-bold ${displayChange >= 0 ? "text-[#26a69a]" : "text-[#ef5350]"}`}>
+                {displayPrice.toFixed(2)}
               </span>
-              <span className={`text-sm font-mono px-2 py-0.5 rounded ${change >= 0 ? "bg-[#26a69a22] text-[#26a69a]" : "bg-[#ef535022] text-[#ef5350]"}`}>
-                {change >= 0 ? "▲" : "▼"} {Math.abs(change).toFixed(2)} ({Math.abs(changePct).toFixed(2)}%)
+              <span className={`text-sm font-mono px-2 py-0.5 rounded ${displayChange >= 0 ? "bg-[#26a69a22] text-[#26a69a]" : "bg-[#ef535022] text-[#ef5350]"}`}>
+                {displayChange >= 0 ? "▲" : "▼"} {Math.abs(displayChange).toFixed(2)} ({Math.abs(displayPct).toFixed(2)}%)
               </span>
+              {isLive && (
+                <span className="flex items-center gap-1 text-xs text-[#8b949e]">
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#26a69a] animate-pulse inline-block" />
+                  即時 {quote.updated_at}
+                </span>
+              )}
             </div>
           )}
         </div>
