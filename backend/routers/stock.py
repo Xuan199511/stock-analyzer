@@ -331,17 +331,31 @@ async def get_support_resistance(
     }
     strength = 有幾個樞紐點落在同一價格區間（越大代表該位置被測試越多次）。
     """
+    import asyncio, traceback
     mkt = _resolve_market(market)
     sym = symbol.upper()
 
-    # 需要足夠歷史資料才能識別有意義的支撐壓力；抓約一年
-    start_date, end_date = _date_range(limit=300)
-    df = await _fetch_df(sym, mkt, start_date, end_date)
+    _empty = {"support": [], "resistance": [], "current_price": 0}
 
-    if df.empty:
-        raise HTTPException(status_code=404, detail=f"找不到 {symbol}（{market}）的資料")
+    try:
+        start_date, end_date = _date_range(limit=300)
 
-    return indicators.calculate_sr(df, window=window, n_levels=levels)
+        # Always run data fetch in a thread so sync yfinance calls don't block the loop
+        if mkt == "tw":
+            df = await _fetch_df(sym, mkt, start_date, end_date)
+        else:
+            df = await asyncio.to_thread(
+                yfinance_service.get_stock_price, sym, start_date, end_date
+            )
+
+        if df.empty:
+            return _empty
+
+        result = indicators.calculate_sr(df, window=window, n_levels=levels)
+        return result
+    except Exception:
+        print(f"[/sr] {sym} ({mkt}) error:\n{traceback.format_exc()}")
+        return _empty
 
 
 # ── LEGACY: GET /api/stock/candles/{symbol} ──────────────────────────────────

@@ -93,6 +93,11 @@ def calculate_sr(
         "current_price": float,
       }
     """
+    # Drop rows where OHLC has NaN to avoid corrupting pivot detection
+    df = df.dropna(subset=["high", "low", "close"]).reset_index(drop=True)
+    if len(df) < window * 2 + 1:
+        return {"support": [], "resistance": [], "current_price": 0}
+
     high  = df["high"].values.astype(float)
     low   = df["low"].values.astype(float)
     close = df["close"].values.astype(float)
