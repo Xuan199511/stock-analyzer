@@ -2,7 +2,7 @@
 
 台股 + 美股即時分析平台，整合技術指標、基本面、情緒分析、策略回測、訊號掃描與支撐壓力位功能。
 
-**線上網址：** [Vercel 前端] → 代理至 [Render 後端 `https://stock-analyzer-backend-1028.onrender.com`]  
+**線上網址：** https://stock-analyzer-two-puce.vercel.app → 代理至 Render 後端 `https://stock-analyzer-backend-1028.onrender.com`  
 **原始碼：** `https://github.com/Xuan199511/stock-analyzer`
 
 ---
@@ -12,8 +12,9 @@
 | 功能 | 說明 |
 |------|------|
 | **K 線圖** | 日K / 周K / 月K / 60m / 15m / 5m / 1m，自動切換 |
-| **技術指標** | MA20、MA60、RSI(14)、MACD(12,26,9)、布林帶(20,2) |
+| **技術指標** | MA5、MA10、MA20、MA60、RSI(14)、MACD(12,26,9)、布林帶(20,2) |
 | **支撐與壓力** | Pivot Point 聚類演算法，前端直接計算，顯示強度 |
+| **短期支撐壓力** | 近 60 根 K 線的短期 S/R，前端計算，大虛線顯示 |
 | **即時報價** | yfinance fast_info，每 30 秒更新；盤中今日 K 棒即時更新 OHLC |
 | **分K自動刷新** | 60m/15m/5m/1m 每 60 秒自動抓新資料 |
 | **基本面** | PE/PB/EPS/ROE/毛利率、近 8 季 EPS、近 12 月營收 |
@@ -199,3 +200,6 @@ npm run dev
 | 即時報價 | yfinance fast_info + 今日 K 棒動態更新 |
 | 分K圖 | /intraday 端點 + 1m/5m/15m/60m/周K/月K |
 | 安全修正 | setInterval 命名衝突修復 |
+| MA5 / MA10 | 後端計算並回傳；前端以 computeMA() 為 fallback，不依賴後端版本 |
+| 短期 S/R | 近 60 根日K，window=5，大虛線標示（短撐/短壓），獨立切換按鈕 |
+| 週K / 月K 修正 | 從日K前端聚合（aggregateCandles），不再走 intraday endpoint，修正異常顯示 |

@@ -1,12 +1,23 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import axios from "axios";
 import CandleChart from "./components/CandleChart";
-import FundamentalPanel from "./components/FundamentalPanel";
-import SentimentPanel from "./components/SentimentPanel";
 import BacktestPanel from "./components/BacktestPanel";
 import ScanPanel from "./components/ScanPanel";
+import DeepAnalysisPanel from "./components/analysis/DeepAnalysisPanel";
+import { fetchDeepAnalysis } from "./api/analysisApi";
 
 const DEFAULT_SYMBOLS = { tw: "2330", us: "AAPL" };
+
+// ── Client-side MA computation (fallback if backend omits ma5/ma10) ──────────
+function computeMA(candles, period) {
+  const result = [];
+  for (let i = period - 1; i < candles.length; i++) {
+    let sum = 0;
+    for (let j = i - period + 1; j <= i; j++) sum += candles[j].close;
+    result.push({ date: candles[i].date, value: Math.round(sum / period * 10000) / 10000 });
+  }
+  return result;
+}
 
 // ── Client-side Support / Resistance calculation ──────────────────────────────
 // Runs entirely in the browser from existing daily candle data.
@@ -49,6 +60,37 @@ function calculateSR(candles, pivotWindow = 10, nLevels = 5, clusterPct = 0.015)
     current_price: cur,
   };
 }
+// ── Client-side weekly / monthly aggregation from daily candles ───────────────
+function aggregateCandles(candles, interval) {
+  if (interval === "1d") return candles;
+  const groups = {};
+  candles.forEach((c) => {
+    const d = new Date(c.date + "T00:00:00");
+    let key;
+    if (interval === "1wk") {
+      // Key = Monday of that week — use LOCAL date parts (not toISOString which gives UTC)
+      const day  = d.getDay() || 7;                        // 1=Mon … 7=Sun
+      const mon  = new Date(d);
+      mon.setDate(d.getDate() - (day - 1));
+      const y  = mon.getFullYear();
+      const m  = String(mon.getMonth() + 1).padStart(2, "0");
+      const dd = String(mon.getDate()).padStart(2, "0");
+      key = `${y}-${m}-${dd}`;
+    } else {
+      key = c.date.slice(0, 7) + "-01";                   // YYYY-MM-01
+    }
+    if (!groups[key]) {
+      groups[key] = { date: key, open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume };
+    } else {
+      groups[key].high   = Math.max(groups[key].high, c.high);
+      groups[key].low    = Math.min(groups[key].low,  c.low);
+      groups[key].close  = c.close;
+      groups[key].volume += c.volume;
+    }
+  });
+  return Object.values(groups).sort((a, b) => a.date.localeCompare(b.date));
+}
+
 const DAILY_LIMIT = 500; // 2 years
 const INTERVAL_OPTIONS = [
   { label: "月K",  value: "1mo" },
@@ -71,8 +113,9 @@ export default function App() {
 
   // Daily data (set once per search)
   const [stockData,       setStockData]       = useState(null);
-  const [fundamentalData, setFundamentalData] = useState(null);
-  const [sentimentData,   setSentimentData]   = useState(null);
+  const [deepAnalysis,    setDeepAnalysis]    = useState(null);
+  const [deepLoading,     setDeepLoading]     = useState(false);
+  const [deepError,       setDeepError]       = useState(null);
   // Intraday candles (replaced on each refresh)
   const [intradayCandles, setIntradayCandles] = useState([]);
   // Live quote (refreshed every 30 s)
@@ -80,6 +123,7 @@ export default function App() {
 
   const [loading,         setLoading]         = useState(false);
   const [intradayLoading, setIntradayLoading] = useState(false);
+  const [intradayError,   setIntradayError]   = useState(null);
   const [error,           setError]           = useState(null);
 
   // Refs so interval callbacks always see current values without stale closures
@@ -110,12 +154,15 @@ export default function App() {
   const fetchIntraday = useCallback(async (sym, mkt, ivl) => {
     try {
       setIntradayLoading(true);
+      setIntradayError(null);
       const res = await axios.get(`/api/stock/${sym}/intraday`, {
         params: { market: mkt, interval: ivl },
       });
       setIntradayCandles(res.data);
     } catch (e) {
       console.error("intraday fetch error", e);
+      const msg = e?.response?.data?.detail || e?.message || "無法取得分K資料";
+      setIntradayError(msg);
     } finally {
       setIntradayLoading(false);
     }
@@ -124,6 +171,9 @@ export default function App() {
   const startIntradayPolling = useCallback((sym, mkt, ivl) => {
     liveRef.current.interval = ivl;
     if (intradayTimer.current) { clearInterval(intradayTimer.current); intradayTimer.current = null; }
+    // Clear stale candles immediately so the chart doesn't briefly show old data
+    setIntradayCandles([]);
+    setIntradayError(null);
     fetchIntraday(sym, mkt, ivl);
     // Only auto-refresh short intraday intervals; weekly/monthly don't need it
     if (SHORT_INTRADAY.has(ivl)) {
@@ -146,11 +196,14 @@ export default function App() {
   }, []);
 
   // ── React to interval change (only when a stock is already loaded) ────────
+  // 1d / 1wk / 1mo → 用本地日K聚合，不呼叫 intraday endpoint
+  const DAILY_LIKE = new Set(["1d", "1wk", "1mo"]);
+
   useEffect(() => {
     if (!stockData) return;
     const { sym, mkt } = liveRef.current;
     if (!sym) return;
-    if (interval === "1d") {
+    if (DAILY_LIKE.has(interval)) {
       stopIntradayPolling();
     } else {
       startIntradayPolling(sym, mkt, interval);
@@ -161,6 +214,22 @@ export default function App() {
   // ── Handlers ──────────────────────────────────────────────────────────────
   const handleMarketChange = (m) => { setMarket(m); setSymbol(DEFAULT_SYMBOLS[m]); };
 
+  const runDeepAnalysis = useCallback(async (forceRefresh = false) => {
+    const sym = symbol.trim().toUpperCase();
+    if (!sym) return;
+    setDeepLoading(true);
+    setDeepError(null);
+    try {
+      const data = await fetchDeepAnalysis(sym, market.toUpperCase(), forceRefresh);
+      setDeepAnalysis(data);
+    } catch (err) {
+      const msg = err?.response?.data?.detail || err?.message || "深度分析載入失敗";
+      setDeepError(msg);
+    } finally {
+      setDeepLoading(false);
+    }
+  }, [symbol, market]);
+
   const handleSearch = async (e) => {
     e.preventDefault();
     const sym = symbol.trim().toUpperCase();
@@ -169,36 +238,35 @@ export default function App() {
     setLoading(true);
     setError(null);
     setStockData(null);
-    setFundamentalData(null);
-    setSentimentData(null);
     setQuoteData(null);
+    setDeepAnalysis(null);
+    setDeepError(null);
     stopIntradayPolling();
     setChartInterval("1d");  // reset to daily on new search
 
     try {
-      const [klineRes, indRes, fundRes, sentRes] = await Promise.allSettled([
+      const [klineRes, indRes] = await Promise.allSettled([
         axios.get(`/api/stock/${sym}/kline`,       { params: { market, period: "daily", limit: DAILY_LIMIT } }),
         axios.get(`/api/stock/${sym}/indicators`,   { params: { market } }),
-        axios.get(`/api/stock/${sym}/fundamental`,  { params: { market } }),
-        axios.get(`/api/stock/${sym}/sentiment`,    { params: { market } }),
       ]);
 
       if (klineRes.status === "fulfilled") {
         const dailyCandles = klineRes.value.data;
+        const ind = indRes.status === "fulfilled" ? indRes.value.data : {};
+        if (!ind.ma5?.length)  ind.ma5  = computeMA(dailyCandles, 5);
+        if (!ind.ma10?.length) ind.ma10 = computeMA(dailyCandles, 10);
         setStockData({
           symbol,
           market,
           candles:    dailyCandles,
-          indicators: indRes.status === "fulfilled" ? indRes.value.data : {},
-          sr:         calculateSR(dailyCandles),   // computed client-side, always works
+          indicators: ind,
+          sr:         calculateSR(dailyCandles, 10, 5),           // 中長期：window=10，全部資料
+          shortSr:    calculateSR(dailyCandles.slice(-60), 5, 3), // 短期：window=5，近 60 根
         });
         startQuotePolling(sym, market);
       } else {
         setError(klineRes.reason?.response?.data?.detail || klineRes.reason?.message);
       }
-
-      if (fundRes.status === "fulfilled") setFundamentalData(fundRes.value.data);
-      if (sentRes.status === "fulfilled") setSentimentData(sentRes.value.data);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -206,19 +274,30 @@ export default function App() {
     }
   };
 
-  // Candles passed to CandleChart: intraday overrides daily when active
-  const chartCandles = interval !== "1d" && intradayCandles.length > 0
-    ? intradayCandles
-    : stockData?.candles ?? [];
+  // Candles passed to CandleChart:
+  //   1d        → 原始日K
+  //   1wk / 1mo → 前端聚合自日K，不走 intraday
+  //   分鐘線    → intraday endpoint 回傳
+  // Memoized so chartData only changes when actual data changes, not on every quote poll.
+  const chartCandles = useMemo(() => {
+    if (!stockData) return [];
+    if (interval === "1wk" || interval === "1mo")
+      return aggregateCandles(stockData.candles, interval);
+    if (interval !== "1d" && intradayCandles.length > 0)
+      return intradayCandles;
+    return stockData.candles;
+  }, [stockData, interval, intradayCandles]);
 
-  const chartData = stockData
-    ? {
-        ...stockData,
-        candles:    chartCandles,
-        // Hide daily indicators in intraday mode (not meaningful on 1-5 bar windows)
-        indicators: interval === "1d" ? stockData.indicators : {},
-      }
-    : null;
+  const chartData = useMemo(() => {
+    if (!stockData) return null;
+    return {
+      ...stockData,
+      candles:    chartCandles,
+      // 指標只在日K顯示（週/月K用日K聚合，MA 點數會不對齊）
+      indicators: interval === "1d" ? stockData.indicators : {},
+      shortSr:    interval === "1d" ? stockData.shortSr : null,
+    };
+  }, [stockData, chartCandles, interval]);
 
   return (
     <div className="min-h-screen bg-[#0d1117] text-[#e6edf3]">
@@ -301,6 +380,15 @@ export default function App() {
           >
             {loading ? "載入中..." : "查詢"}
           </button>
+
+          {/* Deep analysis trigger (on-demand) */}
+          <button type="button" disabled={deepLoading || !stockData}
+            onClick={() => runDeepAnalysis(false)}
+            className="px-5 py-2 bg-[#6f42c1] hover:bg-[#8957e5] disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors"
+            title={stockData ? "以快取為主產生深度分析" : "請先查詢股票"}
+          >
+            {deepLoading ? "分析中..." : "🧠 深度分析"}
+          </button>
         </form>
       </div>
 
@@ -314,6 +402,11 @@ export default function App() {
             {error && (
               <div className="bg-[#3d1f1f] border border-[#f85149] rounded-lg p-4 text-[#f85149] text-sm">
                 ⚠ {error}
+              </div>
+            )}
+            {intradayError && !error && (
+              <div className="bg-[#2d2208] border border-[#f0b429] rounded-lg p-3 text-[#f0b429] text-xs">
+                ⚠ 分K資料無法載入（{intradayError}）。yfinance 分鐘資料限制：1m 僅最近 2 天，5m/15m/60m 最近 5 天，且台股盤後可能暫時無資料。
               </div>
             )}
 
@@ -333,11 +426,13 @@ export default function App() {
               />
             )}
 
-            {!loading && (fundamentalData || sentimentData) && (
-              <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-                {fundamentalData && <FundamentalPanel data={fundamentalData} />}
-                {sentimentData   && <SentimentPanel  data={sentimentData}   />}
-              </div>
+            {(deepAnalysis || deepLoading || deepError) && (
+              <DeepAnalysisPanel
+                report={deepAnalysis}
+                loading={deepLoading}
+                error={deepError}
+                onRefresh={() => runDeepAnalysis(true)}
+              />
             )}
 
             {!loading && !stockData && !error && (

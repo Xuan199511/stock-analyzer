@@ -208,10 +208,11 @@ def _fallback(articles: list[dict], reason: str = "") -> dict:
     overall = "positive" if score > 60 else "negative" if score < 40 else "neutral"
 
     note = f"（Claude 未啟用：{reason}）" if reason else ""
+    tone_label = {"positive": "偏正面", "negative": "偏負面"}.get(overall, "中性")
     return {
         "overall": overall,
         "score":   score,
-        "summary": f"基於關鍵字分析，整體情緒{{'positive':'偏正面','negative':'偏負面'}.get(overall,'中性')}。{note}",
+        "summary": f"基於關鍵字分析，整體情緒{tone_label}。{note}",
         "news":    enriched,
         "trend":   _build_trend(enriched),
         "source":  "keyword",

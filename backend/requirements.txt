@@ -10,3 +10,8 @@ requests
 anthropic
 apscheduler
 pytz
+sqlalchemy>=2.0
+pandas-ta
+beautifulsoup4
+lxml
+loguru

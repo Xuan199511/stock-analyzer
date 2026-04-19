@@ -13,3 +13,7 @@ dist/
 # Misc
 .DS_Store
 *.log
+logs/
+*.db
+
+.vercel

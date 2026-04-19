@@ -26,6 +26,8 @@ def calculate_indicators(df: pd.DataFrame) -> dict:
     dates = df["date"]
 
     # ── Moving Averages ──────────────────────────────────────────────────────
+    ma5  = close.rolling(5).mean()
+    ma10 = close.rolling(10).mean()
     ma20 = close.rolling(20).mean()
     ma60 = close.rolling(60).mean()
 
@@ -50,6 +52,8 @@ def calculate_indicators(df: pd.DataFrame) -> dict:
     bb_lower = bb_mid - 2 * bb_std
 
     return {
+        "ma5":  _to_list(dates, ma5),
+        "ma10": _to_list(dates, ma10),
         "ma20": _to_list(dates, ma20),
         "ma60": _to_list(dates, ma60),
         "rsi":  _to_list(dates, rsi),

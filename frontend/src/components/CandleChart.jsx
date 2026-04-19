@@ -3,8 +3,10 @@ import { createChart, CrosshairMode, LineStyle } from "lightweight-charts";
 
 // Keys match /api/stock/{symbol}/indicators response
 const MA_COLORS = {
-  ma20: "#a78bfa",
-  ma60: "#fb923c",
+  ma5:  "#34d399",  // emerald — 短期
+  ma10: "#60a5fa",  // sky blue — 短期
+  ma20: "#a78bfa",  // purple   — 中期
+  ma60: "#fb923c",  // orange   — 長期
 };
 
 // BB bands: backend returns bb.upper / bb.mid / bb.lower
@@ -16,19 +18,23 @@ export default function CandleChart({ data, quote = null, interval = "1d", intra
   const seriesRef    = useRef({});
 
   const [activeIndicators, setActiveIndicators] = useState({
-    ma20: true, ma60: true, bb: false, volume: true, sr: false,
+    ma5: false, ma10: false, ma20: true, ma60: true, bb: false, volume: true, sr: false, shortSr: false,
   });
   const [showRSI,  setShowRSI]  = useState(false);
   const [showMACD, setShowMACD] = useState(false);
   const [tooltipInfo, setTooltipInfo] = useState(null);
 
-  const srLinesRef = useRef([]);
+  const srLinesRef      = useRef([]);
+  const shortSrLinesRef = useRef([]);
 
-  const { candles = [], indicators = {}, sr = null, symbol, market } = data;
+  const { candles = [], indicators = {}, sr = null, shortSr = null, symbol, market } = data;
 
   // Daily bars use date strings "YYYY-MM-DD"; intraday bars use Unix timestamps (int seconds)
   const toTime = (d) => (typeof d === "number" ? d : d.slice(0, 10));
-  const isIntraday = interval !== "1d";
+  // isIntraday = true only for minute/hourly intervals (shows intraday badge, enables live badge)
+  // isNonDaily = true for 1wk/1mo/intraday (hides MA/BB/RSI/MACD indicator buttons)
+  const isIntraday = !["1d", "1wk", "1mo"].includes(interval);
+  const isNonDaily = interval !== "1d";
 
   // ── Build / rebuild chart whenever data changes ───────────────────────────
   useEffect(() => {
@@ -180,6 +186,43 @@ export default function CandleChart({ data, quote = null, interval = "1d", intra
   // candles 加入 deps：每次 chart 重建後重新畫 SR 線
   }, [activeIndicators.sr, sr, candles]);
 
+  // ── Short-term Support / Resistance price lines ───────────────────────────
+  useEffect(() => {
+    const candleSeries = seriesRef.current.candle;
+    if (!candleSeries) return;
+
+    shortSrLinesRef.current.forEach((line) => {
+      try { candleSeries.removePriceLine(line); } catch (_) {}
+    });
+    shortSrLinesRef.current = [];
+
+    if (!activeIndicators.shortSr || !shortSr) return;
+
+    (shortSr.resistance || []).forEach(({ price, strength }) => {
+      const line = candleSeries.createPriceLine({
+        price,
+        color:            "#fca5a5",
+        lineWidth:        1,
+        lineStyle:        LineStyle.LargeDashed,
+        axisLabelVisible: true,
+        title:            `短壓 ×${strength}`,
+      });
+      shortSrLinesRef.current.push(line);
+    });
+
+    (shortSr.support || []).forEach(({ price, strength }) => {
+      const line = candleSeries.createPriceLine({
+        price,
+        color:            "#6ee7b7",
+        lineWidth:        1,
+        lineStyle:        LineStyle.LargeDashed,
+        axisLabelVisible: true,
+        title:            `短撐 ×${strength}`,
+      });
+      shortSrLinesRef.current.push(line);
+    });
+  }, [activeIndicators.shortSr, shortSr, candles]);
+
   // ── Live last-candle update (daily mode only) ─────────────────────────────
   // When quote arrives with today's OHLC, patch the last bar in-place so it
   // reflects the current session without rebuilding the entire chart.
@@ -264,7 +307,7 @@ export default function CandleChart({ data, quote = null, interval = "1d", intra
       {/* ── Indicator toggles ──────────────────────────────────────────────── */}
       <div className="px-5 py-2 flex flex-wrap gap-2 border-b border-[#21262d]">
         {/* MA / BB / RSI / MACD only meaningful on daily data */}
-        {!isIntraday && Object.entries(MA_COLORS).map(([key, color]) => (
+        {!isNonDaily && Object.entries(MA_COLORS).map(([key, color]) => (
           <button
             key={key}
             onClick={() => toggle(key)}
@@ -276,7 +319,7 @@ export default function CandleChart({ data, quote = null, interval = "1d", intra
             {key.toUpperCase()}
           </button>
         ))}
-        {!isIntraday && (
+        {!isNonDaily && (
           <button
             onClick={() => toggle("bb")}
             className={`px-3 py-1 rounded text-xs font-medium transition-all border ${
@@ -294,7 +337,7 @@ export default function CandleChart({ data, quote = null, interval = "1d", intra
         >
           Volume
         </button>
-        {!isIntraday && (
+        {!isNonDaily && (
           <button
             onClick={() => setShowRSI((v) => !v)}
             className={`px-3 py-1 rounded text-xs font-medium transition-all border ${
@@ -304,7 +347,7 @@ export default function CandleChart({ data, quote = null, interval = "1d", intra
             RSI
           </button>
         )}
-        {!isIntraday && (
+        {!isNonDaily && (
           <button
             onClick={() => setShowMACD((v) => !v)}
             className={`px-3 py-1 rounded text-xs font-medium transition-all border ${
@@ -325,6 +368,19 @@ export default function CandleChart({ data, quote = null, interval = "1d", intra
         >
           S/R
         </button>
+        {!isNonDaily && (
+          <button
+            onClick={() => toggle("shortSr")}
+            className={`px-3 py-1 rounded text-xs font-medium transition-all border ${
+              activeIndicators.shortSr
+                ? "bg-[#6ee7b722] border-[#6ee7b7] text-[#6ee7b7]"
+                : "text-[#8b949e] border-[#30363d]"
+            }`}
+            title={`近期短撐 ${shortSr?.support?.length ?? 0} 條 ／ 短壓 ${shortSr?.resistance?.length ?? 0} 條`}
+          >
+            短期S/R
+          </button>
+        )}
       </div>
 
       {/* ── Main K-line chart ───────────────────────────────────────────────── */}

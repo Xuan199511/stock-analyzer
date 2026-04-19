@@ -23,7 +23,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 import pytz
 
-from routers import stock, fundamental, sentiment, backtest, scan, notify
+from routers import stock, backtest, scan, notify, analysis
 
 # ── Scheduled jobs ────────────────────────────────────────────────────────────
 
@@ -66,6 +66,18 @@ scheduler = AsyncIOScheduler(timezone=_tz)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from db import init_db
+    init_db()
+    print("[DB] SQLite analysis cache initialised")
+
+    try:
+        from services.deep_analysis import cache as analysis_cache
+        removed = analysis_cache.cleanup_expired()
+        if removed:
+            print(f"[DB] cleaned up {removed} expired analysis rows")
+    except Exception as e:
+        print(f"[DB] startup cache cleanup failed: {e}")
+
     scheduler.add_job(_job_tw, CronTrigger(hour=22, minute=30, timezone=_tz))
     scheduler.add_job(_job_us, CronTrigger(hour=15, minute=0,  timezone=_tz))
     scheduler.start()
@@ -122,11 +134,10 @@ async def verify_api_key(request: Request, call_next):
 # ── Routers ───────────────────────────────────────────────────────────────────
 
 app.include_router(stock.router,       prefix="/api/stock",       tags=["Stock / K-Line"])
-app.include_router(fundamental.router, prefix="/api/fundamental",  tags=["Fundamental"])
-app.include_router(sentiment.router,   prefix="/api/sentiment",    tags=["Sentiment"])
 app.include_router(backtest.router,    prefix="/api/backtest",     tags=["Backtest"])
 app.include_router(scan.router,        prefix="/api/scan",         tags=["Signal Scanner"])
 app.include_router(notify.router,      prefix="/api/notify",       tags=["Notify"])
+app.include_router(analysis.router,    prefix="/api/analysis",     tags=["Deep Analysis"])
 
 
 @app.get("/", tags=["Health"])

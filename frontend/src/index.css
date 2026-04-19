@@ -36,3 +36,37 @@ body {
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
+
+/* ── Deep-analysis polish (Phase 7) ───────────────────────────────────── */
+
+/* Shimmering skeleton block for loading states */
+.skeleton {
+  background: linear-gradient(90deg, #1a2029 0%, #252c36 50%, #1a2029 100%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.4s ease-in-out infinite;
+  border-radius: 6px;
+}
+@keyframes skeleton-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* Card fade-in on mount (staggered via inline style) */
+.fade-in {
+  opacity: 0;
+  transform: translateY(8px);
+  animation: fade-in-up 0.5s ease-out forwards;
+}
+@keyframes fade-in-up {
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Radar polygon grow-from-center */
+.radar-poly {
+  transform-origin: center;
+  animation: radar-grow 0.8s cubic-bezier(.2,.8,.2,1) forwards;
+}
+@keyframes radar-grow {
+  from { transform: scale(0); opacity: 0; }
+  to   { transform: scale(1); opacity: 1; }
+}
