@@ -5,10 +5,42 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
-import pandas_ta as ta
 
 from .schemas import MACDData, Technical, InstitutionalFlow
 from .sources import yf as yf_src
+
+
+# ── Pure-pandas indicator helpers (avoid pandas-ta → numba wheel build) ─────
+
+def _sma(s: pd.Series, length: int) -> pd.Series:
+    return s.rolling(length).mean()
+
+
+def _rsi(close: pd.Series, length: int = 14) -> pd.Series:
+    delta = close.diff()
+    gain  = delta.clip(lower=0).rolling(length).mean()
+    loss  = (-delta.clip(upper=0)).rolling(length).mean()
+    rs    = gain / loss.replace(0, np.nan)
+    return 100 - (100 / (1 + rs))
+
+
+def _stoch(high: pd.Series, low: pd.Series, close: pd.Series,
+           k: int = 14, d: int = 3, smooth_k: int = 3) -> pd.DataFrame:
+    ll = low.rolling(k).min()
+    hh = high.rolling(k).max()
+    raw_k = 100 * (close - ll) / (hh - ll).replace(0, np.nan)
+    k_line = raw_k.rolling(smooth_k).mean()
+    d_line = k_line.rolling(d).mean()
+    return pd.DataFrame({"k": k_line, "d": d_line})
+
+
+def _macd(close: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9) -> pd.DataFrame:
+    ema_fast = close.ewm(span=fast,  adjust=False).mean()
+    ema_slow = close.ewm(span=slow,  adjust=False).mean()
+    line     = ema_fast - ema_slow
+    sig      = line.ewm(span=signal, adjust=False).mean()
+    hist     = line - sig
+    return pd.DataFrame({"macd": line, "hist": hist, "signal": sig})
 
 
 def _safe(v) -> Optional[float]:
@@ -92,30 +124,30 @@ def analyze_technical(symbol: str, market: str, inst_flow: Optional[dict] = None
     low   = df["low"].astype(float)
 
     # Moving averages
-    ma5   = _safe(ta.sma(close, length=5).iloc[-1])     if len(close) >= 5   else None
-    ma20  = _safe(ta.sma(close, length=20).iloc[-1])    if len(close) >= 20  else None
-    ma60  = _safe(ta.sma(close, length=60).iloc[-1])    if len(close) >= 60  else None
-    ma240 = _safe(ta.sma(close, length=240).iloc[-1])   if len(close) >= 240 else None
+    ma5   = _safe(_sma(close, 5).iloc[-1])     if len(close) >= 5   else None
+    ma20  = _safe(_sma(close, 20).iloc[-1])    if len(close) >= 20  else None
+    ma60  = _safe(_sma(close, 60).iloc[-1])    if len(close) >= 60  else None
+    ma240 = _safe(_sma(close, 240).iloc[-1])   if len(close) >= 240 else None
 
     # Oscillators
-    rsi = _safe(ta.rsi(close, length=14).iloc[-1]) if len(close) >= 15 else None
+    rsi = _safe(_rsi(close, 14).iloc[-1]) if len(close) >= 15 else None
 
     kd_k = kd_d = None
     if len(close) >= 14:
-        stoch = ta.stoch(high, low, close)
-        if stoch is not None and not stoch.empty:
-            kd_k = _safe(stoch.iloc[-1, 0])
-            kd_d = _safe(stoch.iloc[-1, 1])
+        stoch = _stoch(high, low, close)
+        if not stoch.empty:
+            kd_k = _safe(stoch["k"].iloc[-1])
+            kd_d = _safe(stoch["d"].iloc[-1])
 
     macd_data = MACDData()
     if len(close) >= 35:
-        md = ta.macd(close)
-        if md is not None and not md.empty:
+        md = _macd(close)
+        if not md.empty:
             last = md.iloc[-1]
             macd_data = MACDData(
-                macd=_safe(last.iloc[0]),
-                signal=_safe(last.iloc[2]),
-                hist=_safe(last.iloc[1]),
+                macd=_safe(last["macd"]),
+                signal=_safe(last["signal"]),
+                hist=_safe(last["hist"]),
             )
 
     current = _safe(close.iloc[-1])
